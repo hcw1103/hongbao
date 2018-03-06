@@ -3,6 +3,7 @@ const querystring = require('querystring')
 const cookies = require('./cookies')
 const randomPhone = require('../random-phone')
 const logger = require('../logger')
+const timeout = require('../timeout')
 
 const origin = 'https://h5.ele.me'
 
@@ -33,9 +34,10 @@ async function request ({mobile, url} = {}) {
         if (count >= 3 || number !== 1) {
           throw new Error('网络繁忙，请稍后重试')
         }
-        // 如果这个是最佳红包，继续从头搜寻没有被锁定的 cookie
+        // 如果这个是最佳红包，等两秒，再继续从头搜寻 “没有被锁定的 cookie”
         index = 0
         count++
+        await timeout(2000)
       }
       cookie = cookies[index++]
     } while (cookie.lock)
