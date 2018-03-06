@@ -1,18 +1,15 @@
 const axios = require('axios')
 const querystring = require('querystring')
-const cookie = require('./cookie')
+const cookies = require('./cookies')
 const randomPhone = require('../random-phone')
 const logger = require('../logger')
-const random = require('../random')
 
 const origin = 'https://h5.ele.me'
 
 async function request ({mobile, url} = {}) {
   const query = querystring.parse(url)
-
-  // 一定程度上错开了大家都同时从 0 绑的情况，虽然可能没什么卵用。
-  // 10：因为饿了么红包最多 10 人领，至少给后面留 10 个位置
-  let index = random(0, cookie.length - 10)
+  let index = 0
+  let number = -1
 
   const request = axios.create({
     baseURL: origin,
@@ -28,42 +25,61 @@ async function request ({mobile, url} = {}) {
     }]
   })
 
-  return (async function lottery (phone) {
-    const sns = cookie[index]
+  return (async function lottery () {
+    let cookie
+    do {
+      if (index > cookies.length - 1) {
+        if (number !== 1) {
+          throw new Error('网络繁忙，请稍后重试')
+        }
+        // 如果这个是最佳红包，继续从头搜寻没有被锁定的 cookie
+        index = 0
+      }
+      cookie = cookies[index++]
+    } while (cookie.lock)
 
     if (!query.sn ||
       !query.lucky_number ||
       isNaN(query.lucky_number) ||
-      !sns) {
+      !cookie) {
       throw new Error('饿了么红包链接不正确\n或\n请求饿了么服务器失败')
     }
 
-    phone = phone || randomPhone(mobile)
+    let phone
+    if (number === 1) {
+      // 如果这个是最佳红包，换成指定的手机号领取，并锁定 cookie
+      phone = mobile
+      cookie.lock = true
+    } else {
+      phone = randomPhone(mobile)
+    }
+
     // 绑定手机号
-    await request.put(`/restapi/v1/weixin/${sns.openid}/phone`, {
-      sign: sns.eleme_key,
+    await request.put(`/restapi/v1/weixin/${cookie.sns.openid}/phone`, {
+      sign: cookie.sns.eleme_key,
       phone
     })
     logger.info('绑定手机号', phone)
 
     // 领红包
     // eslint-disable-next-line camelcase
-    const {data: {promotion_records = []}} = await request.post(`/restapi/marketing/promotion/weixin/${sns.openid}`, {
+    const {data: {promotion_records = []}} = await request.post(`/restapi/marketing/promotion/weixin/${cookie.sns.openid}`, {
       device_id: '',
       group_sn: query.sn,
       hardware_id: '',
       method: 'phone',
       phone,
       platform: query.platform,
-      sign: sns.eleme_key,
+      sign: cookie.sns.eleme_key,
       track_id: '',
       unionid: 'fuck', // 别问为什么传 fuck，饿了么前端就是这么传的
       weixin_avatar: '',
       weixin_username: ''
     })
+    cookie.lock = false
 
     // 计算剩余第几个为最佳红包
-    const number = query.lucky_number - promotion_records.length
+    number = query.lucky_number - promotion_records.length
 
     if (number <= 0) {
       // 有时候领取成功了，但是没有返回 lucky，再调一次就可以了
@@ -75,10 +91,8 @@ async function request ({mobile, url} = {}) {
     }
 
     logger.info(`还要领 ${number} 个红包才是手气最佳`)
-    index++
 
-    // 如果这个是最佳红包，换成指定的手机号领取
-    return lottery(number === 1 ? mobile : null)
+    return lottery()
   })()
 }
 
